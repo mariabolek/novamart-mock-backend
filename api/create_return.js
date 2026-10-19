@@ -68,7 +68,7 @@ function no(reason, extra = {}) {
 }
 
 export default function handler(req, res) {
-  const { order_id, item_name, item_opened, is_faulty } = req.body || {};
+  const { order_id, item_name, item_opened, is_faulty } = { ...(req.query || {}), ...(req.body || {}) };
   if (!order_id || !item_name) {
     return res.status(400).json({ error: "order_id and item_name required" });
   }
