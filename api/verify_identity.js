@@ -4,14 +4,15 @@ const IDENTITIES = {
 };
 
 export default function handler(req, res) {
-  const { account_number, postcode } = req.body || {};
-  const record = IDENTITIES[account_number];
-  if (!record || record.postcode !== postcode) {
-    return res.status(200).json({ success: false });
+  const { account_number, postcode } = { ...(req.query || {}), ...(req.body || {}) };
+  const record = IDENTITIES[String(account_number)];
+  if (!record || record.postcode !== String(postcode)) {
+    // Same fields as on success, so the agent's variable assignments never hit a missing field
+    return res.status(200).json({ success: false, customer_name: "", account_number: "" });
   }
   return res.status(200).json({
     success: true,
     customer_name: record.customer_name,
-    account_number
+    account_number: String(account_number)
   });
 }
