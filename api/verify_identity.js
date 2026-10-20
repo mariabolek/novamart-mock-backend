@@ -71,7 +71,7 @@ export default function handler(req, res) {
   const customer = order && CUSTOMERS[order.account];
   const cleanPostcode = String(postcode || "").replace(/\D/g, "");
   if (!customer || customer.postcode !== cleanPostcode) {
-    return res.status(200).json({ success: false, customer_name: "", account_number: "", order_id: "" });
+    return res.status(200).json({ success: false, customer_name: "none", account_number: "none", order_id: "" });
   }
   return res.status(200).json({
     success: true,
