@@ -106,6 +106,10 @@ function evaluate({ order_id, item_name, item_opened, is_faulty, preferred_resol
   if (faulty) {
     const wantsExchange = String(preferred_resolution || "").toLowerCase().startsWith("exch") || String(preferred_resolution || "").toLowerCase().startsWith("repl");
     if (days <= 30) {
+      // Within 30 days the caller chooses; never pick for them
+      if (!String(preferred_resolution || "").trim()) {
+        return { needs_input: "preferred_resolution", next_action: "Ask the caller: Would you like a refund or a replacement? Then call create_return again with submit false and their answer." };
+      }
       if (wantsExchange) {
         return ({
           eligible: true,
