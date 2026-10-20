@@ -77,17 +77,16 @@ function no(reason, explanation, next_step, extra = {}) {
   return { eligible: false, reason, explanation, next_step, ...extra };
 }
 
-export default function handler(req, res) {
-  const { order_id, item_name, item_opened, is_faulty, account_number } = params(req);
+function evaluate({ order_id, item_name, item_opened, is_faulty, preferred_resolution, account_number }) {
   const opened = item_opened === true || item_opened === "true";
   const faulty = is_faulty === true || is_faulty === "true";
 
   const order = findOrder(order_id, account_number);
   if (!order) {
-    return res.status(200).json(no("order_not_found", "We could not find this order on the verified account.", "Check the order number."));
+    return (no("order_not_found", "We could not find this order on the verified account.", "Check the order number."));
   }
   if (order.status !== "delivered") {
-    return res.status(200).json(no("not_delivered_yet",
+    return (no("not_delivered_yet",
       `The order is ${order.status}, so it cannot be returned yet.`,
       order.status === "cancelled" ? "A cancelled order is not charged, so there is nothing to return." : "Once it is delivered, it can be returned within 30 days of delivery.",
       { status: order.status }));
@@ -95,7 +94,7 @@ export default function handler(req, res) {
 
   const item = order.items.find(i => i.name.toLowerCase().includes(String(item_name || "").toLowerCase().replace(/^nova /, "")));
   if (!item) {
-    return res.status(200).json(no("item_not_in_order", "That item is not in this order.", "Choose one of the items in the order.", { items_in_order: order.items.map(i => i.name) }));
+    return (no("item_not_in_order", "That item is not in this order.", "Choose one of the items in the order.", { items_in_order: order.items.map(i => i.name) }));
   }
 
   const days = Math.floor((Date.now() - new Date(order.delivered_date).getTime()) / DAY);
@@ -103,36 +102,63 @@ export default function handler(req, res) {
   const warrantyEnd = addDays(order.delivered_date, WARRANTY_DAYS[item.category]);
   const rma = `RMA-${order.order_id}-${Date.now().toString().slice(-4)}`;
 
-  // Faulty items are exchanged under warranty
+  // Faulty items: refund or replacement within 30 days, replacement under warranty after that
   if (faulty) {
-    if (days > WARRANTY_DAYS[item.category]) {
-      return res.status(200).json(no("warranty_expired", `The warranty ended on ${warrantyEnd}.`, "Our phone support team can look at repair options.", { warranty_end: warrantyEnd }));
+    const wantsExchange = String(preferred_resolution || "").toLowerCase().startsWith("exch") || String(preferred_resolution || "").toLowerCase().startsWith("repl");
+    if (days <= 30) {
+      if (wantsExchange) {
+        return ({
+          eligible: true,
+          return_id: rma,
+          item: item.name,
+          return_type: "exchange",
+          return_shipping_fee: 0,
+          next_step: `A prepaid return label will be emailed. Send the faulty item back by ${returnDeadline} and a replacement ships as soon as it arrives.`
+        });
+      }
+      return ({
+        eligible: true,
+        return_id: rma,
+        item: item.name,
+        return_type: "refund",
+        item_price: item.price,
+        return_shipping_fee: 0,
+        refund_amount: item.price,
+        refund_method: "original payment method",
+        refund_timeline: "5 to 7 business days after NovaMart receives the item",
+        return_deadline: returnDeadline,
+        next_step: `A prepaid return label will be emailed. Send the item back by ${returnDeadline}. Return shipping is free because the item is faulty.`
+      });
     }
-    return res.status(200).json({
+    if (days > WARRANTY_DAYS[item.category]) {
+      return (no("warranty_expired", `The warranty ended on ${warrantyEnd}.`, "Our phone support team can look at repair options.", { warranty_end: warrantyEnd }));
+    }
+    return ({
       eligible: true,
       return_id: rma,
       item: item.name,
       return_type: "exchange",
       return_shipping_fee: 0,
       warranty_end: warrantyEnd,
+      note: "The 30-day refund window has ended, so a faulty item is replaced under warranty instead of refunded.",
       next_step: "A prepaid return label will be emailed. Send the faulty item back and a replacement ships as soon as it arrives."
     });
   }
 
   if (days > 30) {
-    return res.status(200).json(no("outside_30_day_window",
+    return (no("outside_30_day_window",
       `It was delivered ${days} days ago and the 30-day return window ended on ${returnDeadline}.`,
       `If it becomes faulty, it is covered by warranty until ${warrantyEnd}.`,
       { days_since_delivery: days, return_deadline: returnDeadline, warranty_end: warrantyEnd }));
   }
   if (item.category === "electronics" && opened) {
-    return res.status(200).json(no("opened_electronics_not_returnable",
+    return (no("opened_electronics_not_returnable",
       "Opened electronics cannot be returned for a refund.",
-      `If it is faulty, it can be exchanged under warranty until ${warrantyEnd}.`,
+      `If it is faulty, it can be refunded or replaced until ${returnDeadline}, and replaced under warranty until ${warrantyEnd}.`,
       { warranty_end: warrantyEnd }));
   }
 
-  return res.status(200).json({
+  return ({
     eligible: true,
     return_id: rma,
     item: item.name,
@@ -145,4 +171,16 @@ export default function handler(req, res) {
     return_deadline: returnDeadline,
     next_step: `A return label will be emailed. Send the item back by ${returnDeadline}.`
   });
+}
+
+// submit=false only checks the return and quotes the outcome; submit=true creates it
+export default function handler(req, res) {
+  const p = params(req);
+  const submit = p.submit === true || p.submit === "true";
+  const result = evaluate(p);
+  if (result.eligible && !submit) {
+    const { return_id, ...quote } = result;
+    return res.status(200).json({ ...quote, submitted: false, next_action: "Tell the caller this outcome and ask if they want to go ahead. Then call create_return again with submit true." });
+  }
+  return res.status(200).json(result.eligible ? { ...result, submitted: true } : result);
 }
